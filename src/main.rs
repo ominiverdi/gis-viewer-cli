@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use gdal::Dataset;
+use dialoguer::{theme::ColorfulTheme, Select};
+use gdal::{Dataset, Metadata};
 use image::{DynamicImage, RgbImage};
 use std::path::PathBuf;
 use std::process::Command;
@@ -30,7 +31,7 @@ struct Args {
     height: Option<u32>,
 
     /// Show raster metadata only, don't display image
-    #[arg(short, long)]
+    #[arg(long)]
     info: bool,
 
     /// Percentile for contrast stretch (e.g., 2 for 2%-98%)
@@ -40,10 +41,19 @@ struct Args {
     /// Maximum output resolution (default: 4000, use 0 for full resolution)
     #[arg(short = 'r', long, default_value = "4000")]
     max_res: usize,
+
+    /// Interactive mode - select subdataset and bands interactively
+    #[arg(short, long)]
+    interactive: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    // Handle interactive mode
+    if args.interactive {
+        return run_interactive(&args);
+    }
 
     let dataset = Dataset::open(&args.file)
         .with_context(|| format!("Failed to open: {}", args.file.display()))?;
@@ -57,6 +67,165 @@ fn main() -> Result<()> {
     display_image(&img, &args)?;
 
     Ok(())
+}
+
+fn run_interactive(args: &Args) -> Result<()> {
+    let path = &args.file;
+    let path_str = path.to_string_lossy();
+
+    // Build the vsizip path if it's a zip file
+    let gdal_path = if path_str.ends_with(".zip") {
+        format!("/vsizip/{}", path_str)
+    } else {
+        path_str.to_string()
+    };
+
+    // Try to open and get subdatasets
+    let dataset =
+        Dataset::open(&gdal_path).with_context(|| format!("Failed to open: {}", gdal_path))?;
+
+    let subdatasets = get_subdatasets(&dataset);
+
+    let selected_path = if subdatasets.is_empty() {
+        // No subdatasets, use the file directly
+        gdal_path
+    } else {
+        // Let user select a subdataset
+        println!("Available subdatasets:\n");
+        let descriptions: Vec<String> = subdatasets.iter().map(|(_, desc)| desc.clone()).collect();
+
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select subdataset")
+            .items(&descriptions)
+            .default(0)
+            .interact()?;
+
+        subdatasets[selection].0.clone()
+    };
+
+    // Open the selected dataset
+    let dataset = Dataset::open(&selected_path)
+        .with_context(|| format!("Failed to open: {}", selected_path))?;
+
+    let band_count = dataset.raster_count();
+
+    // Select band combination
+    let bands = if band_count >= 3 {
+        let band_options = vec![
+            format!("True color (3,2,1) - Red, Green, Blue"),
+            format!("False color (4,3,2) - NIR, Red, Green"),
+            format!("Color infrared (4,2,1) - NIR, Green, Blue"),
+            format!("Agriculture (4,3,1) - NIR, Red, Blue"),
+            format!("Single band grayscale"),
+            format!("Custom bands"),
+        ];
+
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt(format!(
+                "Select band combination ({} bands available)",
+                band_count
+            ))
+            .items(&band_options)
+            .default(0)
+            .interact()?;
+
+        match selection {
+            0 => vec![3, 2, 1],
+            1 => vec![4, 3, 2],
+            2 => vec![4, 2, 1],
+            3 => vec![4, 3, 1],
+            4 => {
+                // Single band selection
+                let band_items: Vec<String> =
+                    (1..=band_count).map(|i| format!("Band {}", i)).collect();
+                let band_sel = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Select band for grayscale")
+                    .items(&band_items)
+                    .default(0)
+                    .interact()?;
+                vec![band_sel + 1, band_sel + 1, band_sel + 1]
+            }
+            5 => {
+                // Custom bands
+                let band_items: Vec<String> =
+                    (1..=band_count).map(|i| format!("Band {}", i)).collect();
+
+                let r = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Select RED band")
+                    .items(&band_items)
+                    .default(0)
+                    .interact()?
+                    + 1;
+
+                let g = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Select GREEN band")
+                    .items(&band_items)
+                    .default(1.min(band_count - 1))
+                    .interact()?
+                    + 1;
+
+                let b = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Select BLUE band")
+                    .items(&band_items)
+                    .default(2.min(band_count - 1))
+                    .interact()?
+                    + 1;
+
+                vec![r, g, b]
+            }
+            _ => vec![1, 2, 3],
+        }
+    } else {
+        vec![1, 1, 1]
+    };
+
+    // Print the equivalent command
+    println!("\nEquivalent command:");
+    println!(
+        "  gis-view \"{}\" --bands {},{},{}\n",
+        selected_path, bands[0], bands[1], bands[2]
+    );
+
+    // Create modified args with selected bands
+    let modified_args = Args {
+        file: PathBuf::from(&selected_path),
+        bands: Some(bands),
+        width: args.width,
+        height: args.height,
+        info: false,
+        stretch: args.stretch,
+        max_res: args.max_res,
+        interactive: false,
+    };
+
+    let img = render_raster(&dataset, &modified_args)?;
+    display_image(&img, &modified_args)?;
+
+    Ok(())
+}
+
+fn get_subdatasets(dataset: &Dataset) -> Vec<(String, String)> {
+    let mut subdatasets = Vec::new();
+
+    // GDAL stores subdatasets as metadata - use metadata_item to get individual entries
+    let mut i = 1;
+    loop {
+        let name_key = format!("SUBDATASET_{}_NAME", i);
+        let desc_key = format!("SUBDATASET_{}_DESC", i);
+
+        let name = dataset.metadata_item(&name_key, "SUBDATASETS");
+        let desc = dataset.metadata_item(&desc_key, "SUBDATASETS");
+
+        match (name, desc) {
+            (Some(n), Some(d)) => {
+                subdatasets.push((n, d));
+                i += 1;
+            }
+            _ => break,
+        }
+    }
+
+    subdatasets
 }
 
 fn print_metadata(dataset: &Dataset) -> Result<()> {
