@@ -1,0 +1,17 @@
+[package]
+name = "gis-viewer-cli"
+version = "0.1.0"
+edition = "2021"
+description = "View GIS raster images in the terminal"
+license = "MIT"
+
+[[bin]]
+name = "gis-view"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+gdal = { version = "0.19", features = ["bindgen"] }
+image = "0.25"
+viuer = "0.11"
+anyhow = "1.0"
