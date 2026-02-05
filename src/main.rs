@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use dialoguer::{theme::ColorfulTheme, Select};
+use gdal::vector::LayerAccess;
 use gdal::{Dataset, Metadata};
-use image::{DynamicImage, RgbImage};
+use image::{DynamicImage, Rgb, RgbImage};
 use std::path::PathBuf;
 use std::process::Command;
 use viuer::Config;
@@ -45,15 +46,17 @@ struct Args {
     /// Interactive mode - select subdataset and bands interactively
     #[arg(short, long)]
     interactive: bool,
+
+    /// Layer index for vector files (0-based, default: 0)
+    #[arg(short = 'l', long)]
+    layer: Option<usize>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Handle interactive mode
-    if args.interactive {
-        return run_interactive(&args);
-    }
+    // NOTE: Don't handle interactive mode here - check file type first
+    // Interactive mode is handled below based on whether it's raster or vector
 
     // Build the path - handle ZIP files with /vsizip/ prefix
     let path_str = args.file.to_string_lossy();
@@ -85,9 +88,50 @@ fn main() -> Result<()> {
         return run_interactive(&args);
     }
 
+    // Check if this is a vector file
+    let layer_count = dataset.layer_count();
+    if band_count == 0 && layer_count > 0 {
+        // This is a vector file
+        if args.info {
+            print_vector_info(&dataset)?;
+            return Ok(());
+        }
+
+        // Determine which layer to render
+        let layer_idx = if let Some(idx) = args.layer {
+            if idx >= layer_count {
+                anyhow::bail!(
+                    "Layer index {} out of range. File has {} layers (0-{})",
+                    idx,
+                    layer_count,
+                    layer_count - 1
+                );
+            }
+            idx
+        } else if layer_count > 1 && args.interactive {
+            // Interactive layer selection
+            select_vector_layer(&dataset)?
+        } else if layer_count > 1 {
+            // Multiple layers, no selection - show info and prompt
+            eprintln!(
+                "Vector file has {} layers. Use --layer N or -i for interactive selection.\n",
+                layer_count
+            );
+            print_vector_info(&dataset)?;
+            return Ok(());
+        } else {
+            0 // Single layer, use it
+        };
+
+        // Render vector to image
+        let img = render_vector(&dataset, layer_idx, &args)?;
+        display_image(&img, &args)?;
+        return Ok(());
+    }
+
     if band_count == 0 {
         anyhow::bail!(
-            "File has no raster bands. If this is a multi-dataset format, try: gis-view -i {:?}",
+            "File has no raster bands or vector layers. If this is a multi-dataset format, try: gis-view -i {:?}",
             args.file
         );
     }
@@ -230,6 +274,7 @@ fn run_interactive(args: &Args) -> Result<()> {
         stretch: args.stretch,
         max_res: args.max_res,
         interactive: false,
+        layer: None,
     };
 
     let img = render_raster(&dataset, &modified_args)?;
@@ -542,4 +587,262 @@ fn display_image(img: &DynamicImage, _args: &Args) -> Result<()> {
     viuer::print(img, &config).context("Failed to display image")?;
 
     Ok(())
+}
+
+fn print_vector_info(dataset: &Dataset) -> Result<()> {
+    let layer_count = dataset.layer_count();
+    let driver = dataset.driver().short_name();
+
+    println!("Vector file: {}", driver);
+    println!("Layers: {}", layer_count);
+    println!();
+
+    for i in 0..layer_count {
+        let layer = dataset.layer(i)?;
+        let name = layer.name();
+        let feature_count = layer.feature_count();
+        let geom_type = layer
+            .defn()
+            .geom_fields()
+            .next()
+            .map(|f| format!("{:?}", f.field_type()))
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        println!("Layer [{}]: {}", i, name);
+        println!("  Features: {}", feature_count);
+        println!("  Geometry: {}", geom_type);
+
+        // Get extent
+        if let Ok(extent) = layer.get_extent() {
+            println!(
+                "  Extent: ({:.6}, {:.6}) - ({:.6}, {:.6})",
+                extent.MinX, extent.MinY, extent.MaxX, extent.MaxY
+            );
+        }
+
+        // Get spatial reference
+        if let Some(srs) = layer.spatial_ref() {
+            if let Some(name) = srs.name() {
+                println!("  CRS: {}", name);
+            }
+        }
+
+        // List attribute fields
+        let defn = layer.defn();
+        let fields: Vec<String> = defn.fields().map(|f| f.name()).collect();
+        if !fields.is_empty() {
+            println!("  Fields: {}", fields.join(", "));
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+fn select_vector_layer(dataset: &Dataset) -> Result<usize> {
+    let layer_count = dataset.layer_count();
+    let mut layer_items = Vec::new();
+
+    for i in 0..layer_count {
+        let layer = dataset.layer(i)?;
+        let name = layer.name();
+        let feature_count = layer.feature_count();
+        let geom_type = layer
+            .defn()
+            .geom_fields()
+            .next()
+            .map(|f| format!("{:?}", f.field_type()))
+            .unwrap_or_else(|| "Unknown".to_string());
+        layer_items.push(format!(
+            "{} ({} features, {})",
+            name, feature_count, geom_type
+        ));
+    }
+
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select layer to display")
+        .items(&layer_items)
+        .default(0)
+        .interact()?;
+
+    Ok(selection)
+}
+
+fn render_vector(dataset: &Dataset, layer_idx: usize, args: &Args) -> Result<DynamicImage> {
+    // Get terminal size for output dimensions
+    let terminal_size = get_terminal_pixel_size();
+    let (img_width, _) = terminal_size.unwrap_or((1024, 768));
+
+    // Use specified max_res or terminal size
+    let max_dim = if args.max_res > 0 && args.max_res < img_width {
+        args.max_res
+    } else {
+        img_width
+    };
+
+    // Get the selected layer
+    let layer = dataset.layer(layer_idx)?;
+    let extent = layer
+        .get_extent()
+        .context("Cannot get layer extent for rendering")?;
+
+    // Calculate output dimensions maintaining aspect ratio
+    let extent_width = extent.MaxX - extent.MinX;
+    let extent_height = extent.MaxY - extent.MinY;
+    let aspect = extent_width / extent_height;
+
+    let (out_width, out_height) = if aspect > 1.0 {
+        (max_dim, (max_dim as f64 / aspect) as usize)
+    } else {
+        ((max_dim as f64 * aspect) as usize, max_dim)
+    };
+
+    eprintln!(
+        "Rendering {} features to {}x{} image",
+        layer.feature_count(),
+        out_width,
+        out_height
+    );
+
+    // Create image with dark background
+    let mut img = RgbImage::from_pixel(out_width as u32, out_height as u32, Rgb([20, 20, 30]));
+
+    // Transform coordinates to pixel space
+    let scale_x = out_width as f64 / extent_width;
+    let scale_y = out_height as f64 / extent_height;
+
+    // Draw each feature
+    let mut layer = dataset.layer(layer_idx)?; // Re-get layer to reset iterator
+    for feature in layer.features() {
+        if let Some(geom) = feature.geometry() {
+            draw_geometry(&mut img, &geom, &extent, scale_x, scale_y, out_height);
+        }
+    }
+
+    Ok(DynamicImage::ImageRgb8(img))
+}
+
+fn draw_geometry(
+    img: &mut RgbImage,
+    geom: &gdal::vector::Geometry,
+    extent: &gdal::vector::Envelope,
+    scale_x: f64,
+    scale_y: f64,
+    img_height: usize,
+) {
+    let color = Rgb([100, 200, 255]); // Cyan-ish color for vectors
+
+    // Get geometry type name
+    let geom_type = geom.geometry_type();
+
+    match geom_type {
+        // Points
+        gdal::vector::OGRwkbGeometryType::wkbPoint
+        | gdal::vector::OGRwkbGeometryType::wkbPoint25D
+        | gdal::vector::OGRwkbGeometryType::wkbPointM
+        | gdal::vector::OGRwkbGeometryType::wkbPointZM => {
+            let (x, y, _) = geom.get_point(0);
+            let px = ((x - extent.MinX) * scale_x) as i32;
+            let py = (img_height as f64 - (y - extent.MinY) * scale_y) as i32;
+            draw_point(img, px, py, color);
+        }
+        // LineStrings
+        gdal::vector::OGRwkbGeometryType::wkbLineString
+        | gdal::vector::OGRwkbGeometryType::wkbLineString25D => {
+            draw_linestring(img, geom, extent, scale_x, scale_y, img_height, color);
+        }
+        // Polygons
+        gdal::vector::OGRwkbGeometryType::wkbPolygon
+        | gdal::vector::OGRwkbGeometryType::wkbPolygon25D => {
+            // Draw exterior ring
+            let ring = geom.get_geometry(0);
+            draw_linestring(img, &ring, extent, scale_x, scale_y, img_height, color);
+        }
+        // Multi geometries - recurse
+        gdal::vector::OGRwkbGeometryType::wkbMultiPoint
+        | gdal::vector::OGRwkbGeometryType::wkbMultiLineString
+        | gdal::vector::OGRwkbGeometryType::wkbMultiPolygon
+        | gdal::vector::OGRwkbGeometryType::wkbGeometryCollection => {
+            for i in 0..geom.geometry_count() {
+                let sub_geom = geom.get_geometry(i);
+                draw_geometry(img, &sub_geom, extent, scale_x, scale_y, img_height);
+            }
+        }
+        _ => {
+            // Try to handle as collection
+            for i in 0..geom.geometry_count() {
+                let sub_geom = geom.get_geometry(i);
+                draw_geometry(img, &sub_geom, extent, scale_x, scale_y, img_height);
+            }
+        }
+    }
+}
+
+fn draw_point(img: &mut RgbImage, x: i32, y: i32, color: Rgb<u8>) {
+    // Draw a small cross for points
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            let px = x + dx;
+            let py = y + dy;
+            if px >= 0 && py >= 0 && (px as u32) < img.width() && (py as u32) < img.height() {
+                img.put_pixel(px as u32, py as u32, color);
+            }
+        }
+    }
+}
+
+fn draw_linestring(
+    img: &mut RgbImage,
+    geom: &gdal::vector::Geometry,
+    extent: &gdal::vector::Envelope,
+    scale_x: f64,
+    scale_y: f64,
+    img_height: usize,
+    color: Rgb<u8>,
+) {
+    let point_count = geom.point_count();
+    if point_count < 2 {
+        return;
+    }
+
+    for i in 0..(point_count - 1) as i32 {
+        let (x1, y1, _) = geom.get_point(i);
+        let (x2, y2, _) = geom.get_point(i + 1);
+        let px1 = ((x1 - extent.MinX) * scale_x) as i32;
+        let py1 = (img_height as f64 - (y1 - extent.MinY) * scale_y) as i32;
+        let px2 = ((x2 - extent.MinX) * scale_x) as i32;
+        let py2 = (img_height as f64 - (y2 - extent.MinY) * scale_y) as i32;
+        draw_line(img, px1, py1, px2, py2, color);
+    }
+}
+
+fn draw_line(img: &mut RgbImage, x0: i32, y0: i32, x1: i32, y1: i32, color: Rgb<u8>) {
+    // Bresenham's line algorithm
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    let mut x = x0;
+    let mut y = y0;
+
+    loop {
+        if x >= 0 && y >= 0 && (x as u32) < img.width() && (y as u32) < img.height() {
+            img.put_pixel(x as u32, y as u32, color);
+        }
+
+        if x == x1 && y == y1 {
+            break;
+        }
+
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
 }

@@ -1,8 +1,8 @@
 [package]
 name = "gis-viewer-cli"
-version = "0.1.0"
+version = "0.2.2"
 edition = "2021"
-description = "View GIS raster images in the terminal"
+description = "View GIS raster and vector files in the terminal"
 license = "MIT"
 
 [[bin]]
