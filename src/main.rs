@@ -409,28 +409,12 @@ fn render_raster(dataset: &Dataset, args: &Args) -> Result<DynamicImage> {
     let (src_width, src_height) = dataset.raster_size();
     let band_count = dataset.raster_count();
 
-    // Get terminal size for smart scaling
-    let terminal_size = get_terminal_pixel_size();
-
     // Calculate output dimensions (downsample if needed)
     let (out_width, out_height) = if args.max_res > 0 {
         let max_dim = args.max_res;
         let scale = (max_dim as f64 / src_width.max(src_height) as f64).min(1.0);
-        let mut out_w = ((src_width as f64 * scale) as usize).max(1);
-        let mut out_h = ((src_height as f64 * scale) as usize).max(1);
-
-        // If output would be smaller than terminal, scale up to terminal size
-        // This avoids display issues with some terminal graphics protocols
-        if let Some((term_w, term_h)) = terminal_size {
-            if out_w < term_w && out_h < term_h && src_width > term_w {
-                // Image was downsampled below terminal size - use terminal size instead
-                let term_scale = (term_w as f64 / src_width as f64)
-                    .min(term_h as f64 / src_height as f64)
-                    .min(1.0);
-                out_w = ((src_width as f64 * term_scale) as usize).max(1);
-                out_h = ((src_height as f64 * term_scale) as usize).max(1);
-            }
-        }
+        let out_w = ((src_width as f64 * scale) as usize).max(1);
+        let out_h = ((src_height as f64 * scale) as usize).max(1);
         (out_w, out_h)
     } else {
         // Full resolution, but cap at MAX_PIXELS
