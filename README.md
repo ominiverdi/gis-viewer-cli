@@ -141,6 +141,17 @@ gis-view "SENTINEL2_L2A:/vsizip//path/to/S2A_MSIL2A_*.SAFE.zip/*/MTD_MSIL2A.xml:
 
 For best results, use [Kitty](https://sw.kovidgoyal.net/kitty/).
 
+## See Also
+
+- **[viewtif](https://github.com/nkeikon/tifviewer)** by Keiko Nomura - A Python-based GeoTIFF viewer with Qt GUI. Great for desktop use with features like vector overlays, basemaps, NetCDF support, and QGIS export. Requires a graphical display environment.
+
+| Use Case | Recommended Tool |
+|----------|------------------|
+| SSH/remote server without X11 | gis-view |
+| Desktop with full GUI features | viewtif |
+| Quick terminal preview | gis-view |
+| Vector overlays & basemaps | viewtif |
+
 ## License
 
 MIT
