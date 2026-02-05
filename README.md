@@ -86,9 +86,28 @@ gis-view image.tif --stretch 5
 gis-view large-image.tif --max-res 2000
 ```
 
+### Vector Files
+
+```bash
+# View a GeoJSON file
+gis-view boundaries.geojson
+
+# Show vector file info
+gis-view data.gpkg --info
+
+# Interactive layer selection for multi-layer files
+gis-view data.gpkg -i
+
+# Select a specific layer
+gis-view data.gpkg --layer 2
+```
+
+![Vector Interactive Mode](img/vector-interactive.png)
+*Vector layer selection and rendering in the terminal*
+
 ### Interactive Mode
 
-Use `-i` for guided exploration of any raster file:
+Use `-i` for guided exploration of any raster or vector file:
 
 ```bash
 gis-view -i image.tif
