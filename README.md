@@ -17,32 +17,53 @@ View GIS raster images directly in the terminal. Supports Sentinel-2, GeoTIFF, C
 
 ## Installation
 
-### From Release (Recommended)
+### macOS / Windows
 
 Download the latest binary for your platform from [Releases](https://github.com/ominiverdi/gis-viewer-cli/releases).
 
-**Note:** GDAL must be installed on your system:
-
+GDAL must be installed:
 ```bash
 # macOS
 brew install gdal
 
-# Ubuntu/Debian
-sudo apt install libgdal-dev
+# Windows: GDAL is bundled or use OSGeo4W
 ```
 
-### From Source
+### Linux
+
+**Important:** Linux binaries are dynamically linked to GDAL. You must download 
+the binary matching your system's GDAL version, or build from source.
+
+1. Check your GDAL version:
+   ```bash
+   gdal-config --version
+   ```
+
+2. Download the matching binary from [Releases](https://github.com/ominiverdi/gis-viewer-cli/releases):
+   - Ubuntu 22.04 (GDAL 3.4): `gis-view-...-ubuntu22.04-gdal3.4.tar.gz`
+   - Ubuntu 24.04 (GDAL 3.8): `gis-view-...-ubuntu24.04-gdal3.8.tar.gz`
+
+3. Or **build from source** (recommended for non-standard GDAL versions):
+   ```bash
+   sudo apt install libgdal-dev
+   cargo install --git https://github.com/ominiverdi/gis-viewer-cli
+   ```
+
+### Build from Source
 
 ```bash
-# Install GDAL first (see above)
+# Install GDAL first
+# macOS: brew install gdal
+# Ubuntu: sudo apt install libgdal-dev
 
-# Clone and build
 git clone https://github.com/ominiverdi/gis-viewer-cli.git
 cd gis-viewer-cli
 cargo build --release
 ```
 
 Binary will be at `target/release/gis-view`.
+
+See [Installation Guide](docs/installation.md) for detailed instructions and troubleshooting.
 
 ## Usage
 

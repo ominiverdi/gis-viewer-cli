@@ -10,20 +10,34 @@ env:
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.target }}${{ matrix.suffix && format(' ({0})', matrix.suffix) || '' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # macOS builds (dynamically linked to Homebrew GDAL)
           - target: x86_64-apple-darwin
-            os: macos-15-intel
+            os: macos-13
+            suffix: ""
           - target: aarch64-apple-darwin
             os: macos-latest
+            suffix: ""
+
+          # Linux builds - multiple Ubuntu versions for GDAL compatibility
+          # Ubuntu 22.04 LTS ships GDAL 3.4.x (libgdal.so.30)
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
+            suffix: ubuntu22.04-gdal3.4
+          # Ubuntu 24.04 LTS ships GDAL 3.8.x (libgdal.so.34)
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            suffix: ubuntu24.04-gdal3.8
+
+          # Windows build
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            suffix: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +56,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgdal-dev gdal-bin
+          echo "GDAL version: $(gdal-config --version)"
+          echo "GDAL library: $(ldconfig -p | grep libgdal || true)"
 
       - name: Install GDAL (Windows)
         if: runner.os == 'Windows'
@@ -55,32 +71,43 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
+      # Determine artifact name (with or without suffix)
+      - name: Set artifact name
+        id: artifact
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.suffix }}" ]; then
+            echo "name=gis-view-${{ matrix.target }}-${{ matrix.suffix }}" >> $GITHUB_OUTPUT
+          else
+            echo "name=gis-view-${{ matrix.target }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../gis-view-${{ matrix.target }}.tar.gz gis-view
+          tar -czvf ../../../${{ steps.artifact.outputs.name }}.tar.gz gis-view
           cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/gis-view.exe -DestinationPath gis-view-${{ matrix.target }}.zip
+          Compress-Archive -Path target/${{ matrix.target }}/release/gis-view.exe -DestinationPath ${{ steps.artifact.outputs.name }}.zip
 
       - name: Upload artifact (Unix)
         if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: gis-view-${{ matrix.target }}
-          path: gis-view-${{ matrix.target }}.tar.gz
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.artifact.outputs.name }}.tar.gz
 
       - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: gis-view-${{ matrix.target }}
-          path: gis-view-${{ matrix.target }}.zip
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.artifact.outputs.name }}.zip
 
   release:
     name: Create Release
@@ -98,9 +125,33 @@ jobs:
           path: artifacts
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          body: |
+            ## Installation
+
+            ### Linux
+            Choose the binary matching your system's GDAL version:
+
+            | Your System | GDAL Version | Download |
+            |-------------|--------------|----------|
+            | Ubuntu 22.04 LTS | 3.4.x | `gis-view-...-ubuntu22.04-gdal3.4.tar.gz` |
+            | Ubuntu 24.04 LTS | 3.8.x | `gis-view-...-ubuntu24.04-gdal3.8.tar.gz` |
+            | Debian 12 | 3.6.x | Try ubuntu22.04 or build from source |
+            | Other | varies | Build from source (see below) |
+
+            Check your GDAL version: `gdal-config --version`
+
+            ### macOS / Windows
+            Download the binary for your architecture.
+
+            ### Build from Source (recommended for non-standard GDAL)
+            ```bash
+            # Ensure GDAL is installed, then:
+            cargo install --git https://github.com/ominiverdi/gis-viewer-cli
+            ```
+
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.zip
