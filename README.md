@@ -1,13 +1,15 @@
 # gis-viewer-cli
 
-View GIS raster images directly in the terminal. Supports Sentinel-2, GeoTIFF, COG, and any GDAL-supported format.
+View GIS raster and vector files directly in the terminal. Supports Sentinel-2, GeoTIFF, COG, GeoJSON, Shapefile, GeoPackage, and any GDAL-supported format.
 
 ![True Color Sentinel-2](img/true-color.png)
 *Sentinel-2 True Color Image displayed in Kitty terminal*
 
 ## Features
 
-- **Interactive mode** - auto-detects file structure, guides through subdataset and band selection
+- **Raster support** - GeoTIFF, COG, Sentinel-2 SAFE.zip, HDF, NetCDF, and more
+- **Vector support** - GeoJSON, Shapefile, GeoPackage with layer selection
+- **Interactive mode** - auto-detects file structure, guides through subdataset/layer/band selection
 - **Full pixel rendering** in Kitty terminal (falls back to Unicode blocks elsewhere)
 - **Read directly from zipped files** (Sentinel-2 SAFE.zip, etc.)
 - **Band selection** for custom RGB composites
