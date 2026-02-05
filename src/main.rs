@@ -55,6 +55,11 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Check if file exists before trying to open with GDAL
+    if !args.file.exists() {
+        anyhow::bail!("File not found: {}", args.file.display());
+    }
+
     // NOTE: Don't handle interactive mode here - check file type first
     // Interactive mode is handled below based on whether it's raster or vector
 
