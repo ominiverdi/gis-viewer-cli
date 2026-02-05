@@ -55,8 +55,42 @@ fn main() -> Result<()> {
         return run_interactive(&args);
     }
 
-    let dataset = Dataset::open(&args.file)
+    // Build the path - handle ZIP files with /vsizip/ prefix
+    let path_str = args.file.to_string_lossy();
+    let gdal_path = if path_str.ends_with(".zip") || path_str.ends_with(".ZIP") {
+        format!("/vsizip/{}", path_str)
+    } else {
+        path_str.to_string()
+    };
+
+    let dataset = Dataset::open(&gdal_path)
         .with_context(|| format!("Failed to open: {}", args.file.display()))?;
+
+    // Check if this is a container file with subdatasets but no direct bands
+    let band_count = dataset.raster_count();
+    let subdatasets = get_subdatasets(&dataset);
+
+    if band_count == 0 && !subdatasets.is_empty() {
+        // This is a container file (e.g., Sentinel-2 ZIP, HDF, NetCDF)
+        if args.info {
+            // Show subdataset info
+            print_container_info(&dataset, &subdatasets)?;
+            return Ok(());
+        }
+        // Auto-switch to interactive mode for rendering
+        eprintln!(
+            "Detected container file with {} subdatasets. Switching to interactive mode...\n",
+            subdatasets.len()
+        );
+        return run_interactive(&args);
+    }
+
+    if band_count == 0 {
+        anyhow::bail!(
+            "File has no raster bands. If this is a multi-dataset format, try: gis-view -i {:?}",
+            args.file
+        );
+    }
 
     if args.info {
         print_metadata(&dataset)?;
@@ -226,6 +260,24 @@ fn get_subdatasets(dataset: &Dataset) -> Vec<(String, String)> {
     }
 
     subdatasets
+}
+
+fn print_container_info(dataset: &Dataset, subdatasets: &[(String, String)]) -> Result<()> {
+    let driver = dataset.driver().short_name();
+    println!("Container format: {}", driver);
+    println!("Subdatasets: {}\n", subdatasets.len());
+
+    for (i, (name, desc)) in subdatasets.iter().enumerate() {
+        println!("  [{}] {}", i + 1, desc);
+        println!("      Path: {}", name);
+    }
+
+    println!("\nTo view a subdataset, use interactive mode:");
+    println!("  gis-view -i <file>");
+    println!("\nOr specify the subdataset path directly:");
+    println!("  gis-view \"<subdataset_path>\" --bands 4,3,2");
+
+    Ok(())
 }
 
 fn print_metadata(dataset: &Dataset) -> Result<()> {
