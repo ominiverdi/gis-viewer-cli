@@ -320,18 +320,73 @@ fn print_metadata(dataset: &Dataset) -> Result<()> {
     Ok(())
 }
 
+/// Get terminal pixel dimensions (width, height) if available
+fn get_terminal_pixel_size() -> Option<(usize, usize)> {
+    // Try Kitty's method
+    if std::env::var("KITTY_WINDOW_ID").is_ok() {
+        if let Ok(output) = Command::new("kitten")
+            .args(["icat", "--print-window-size"])
+            .output()
+        {
+            if output.status.success() {
+                let size_str = String::from_utf8_lossy(&output.stdout);
+                let parts: Vec<&str> = size_str.trim().split('x').collect();
+                if parts.len() == 2 {
+                    if let (Ok(w), Ok(h)) = (parts[0].parse(), parts[1].parse()) {
+                        return Some((w, h));
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: estimate from terminal character dimensions
+    // Most terminals are roughly 80 columns, assume ~10 pixels per character
+    if let Ok(output) = Command::new("tput").arg("cols").output() {
+        if output.status.success() {
+            if let Ok(cols) = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<usize>()
+            {
+                // Estimate pixel width (most fonts are ~8-10 pixels wide)
+                let estimated_width = cols * 9;
+                let estimated_height = estimated_width * 3 / 4; // Assume 4:3 aspect
+                return Some((estimated_width, estimated_height));
+            }
+        }
+    }
+
+    // Final fallback: assume reasonable defaults
+    Some((1920, 1080))
+}
+
 fn render_raster(dataset: &Dataset, args: &Args) -> Result<DynamicImage> {
     let (src_width, src_height) = dataset.raster_size();
     let band_count = dataset.raster_count();
+
+    // Get terminal size for smart scaling
+    let terminal_size = get_terminal_pixel_size();
 
     // Calculate output dimensions (downsample if needed)
     let (out_width, out_height) = if args.max_res > 0 {
         let max_dim = args.max_res;
         let scale = (max_dim as f64 / src_width.max(src_height) as f64).min(1.0);
-        (
-            ((src_width as f64 * scale) as usize).max(1),
-            ((src_height as f64 * scale) as usize).max(1),
-        )
+        let mut out_w = ((src_width as f64 * scale) as usize).max(1);
+        let mut out_h = ((src_height as f64 * scale) as usize).max(1);
+
+        // If output would be smaller than terminal, scale up to terminal size
+        // This avoids display issues with some terminal graphics protocols
+        if let Some((term_w, term_h)) = terminal_size {
+            if out_w < term_w && out_h < term_h && src_width > term_w {
+                // Image was downsampled below terminal size - use terminal size instead
+                let term_scale = (term_w as f64 / src_width as f64)
+                    .min(term_h as f64 / src_height as f64)
+                    .min(1.0);
+                out_w = ((src_width as f64 * term_scale) as usize).max(1);
+                out_h = ((src_height as f64 * term_scale) as usize).max(1);
+            }
+        }
+        (out_w, out_h)
     } else {
         // Full resolution, but cap at MAX_PIXELS
         let total = src_width * src_height;
@@ -477,37 +532,14 @@ fn normalize_percentile(
 }
 
 fn display_image(img: &DynamicImage, _args: &Args) -> Result<()> {
-    // Check if we're in Kitty terminal
-    if std::env::var("KITTY_WINDOW_ID").is_ok() {
-        // Use kitten icat for guaranteed pixel-perfect rendering
-        let temp_dir = std::env::temp_dir();
-        let temp_path = temp_dir.join("gis-view-temp.png");
-
-        img.save(&temp_path)
-            .context("Failed to save temporary image")?;
-
-        let status = Command::new("kitten")
-            .args(["icat", "--align", "left"])
-            .arg(&temp_path)
-            .status()
-            .context("Failed to run kitten icat")?;
-
-        // Clean up
-        let _ = std::fs::remove_file(&temp_path);
-
-        if !status.success() {
-            anyhow::bail!("kitten icat failed");
-        }
-    } else {
-        // Fall back to viuer for other terminals
-        let config = Config {
-            absolute_offset: false,
-            use_kitty: true,
-            use_iterm: true,
-            ..Default::default()
-        };
-        viuer::print(img, &config).context("Failed to display image")?;
-    }
+    // Use viuer for all terminals - it handles Kitty, iTerm2, and falls back to blocks
+    let config = Config {
+        absolute_offset: false,
+        use_kitty: true,
+        use_iterm: true,
+        ..Default::default()
+    };
+    viuer::print(img, &config).context("Failed to display image")?;
 
     Ok(())
 }
