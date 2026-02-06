@@ -68,13 +68,12 @@ jobs:
         run: |
           vcpkg install gdal:x64-windows
           $vcpkgRoot = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          # gdal-sys expects gdal_i.lib but vcpkg installs gdal.lib
+          Copy-Item "$vcpkgRoot\lib\gdal.lib" "$vcpkgRoot\lib\gdal_i.lib" -ErrorAction SilentlyContinue
           echo "GDAL_HOME=$vcpkgRoot" >> $env:GITHUB_ENV
           echo "GDAL_LIB_DIR=$vcpkgRoot\lib" >> $env:GITHUB_ENV
-          echo "GDAL_INCLUDE_DIR=$vcpkgRoot\include" >> $env:GITHUB_ENV
           echo "GDAL_VERSION=3" >> $env:GITHUB_ENV
           echo "$vcpkgRoot\bin" >> $env:GITHUB_PATH
-          # Debug: show what was installed
-          Get-ChildItem -Path "$vcpkgRoot\lib" -Filter "gdal*" -ErrorAction SilentlyContinue
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
