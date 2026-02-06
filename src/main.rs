@@ -62,7 +62,10 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // Check if file exists before trying to open with GDAL
-    if !args.file.exists() {
+    // Skip check for subdataset paths (contain ':' like SENTINEL2_L2A:/vsizip/...)
+    let path_str_check = args.file.to_string_lossy();
+    let is_subdataset = path_str_check.contains(":/vsi") || path_str_check.contains(":EPSG");
+    if !is_subdataset && !args.file.exists() {
         anyhow::bail!("File not found: {}", args.file.display());
     }
 
@@ -484,11 +487,13 @@ fn render_raster(dataset: &Dataset, args: &Args) -> Result<DynamicImage> {
     // Get nodata value from first band
     let nodata = dataset.rasterband(bands[0])?.no_data_value();
 
-    // Normalize each band
+    // Normalize bands using shared min/max to preserve color relationships
     let stretch = args.stretch / 100.0;
-    let red_norm = normalize_percentile(&red, nodata, stretch, 1.0 - stretch);
-    let green_norm = normalize_percentile(&green, nodata, stretch, 1.0 - stretch);
-    let blue_norm = normalize_percentile(&blue, nodata, stretch, 1.0 - stretch);
+    let (global_min, global_max) =
+        compute_global_percentiles(&red, &green, &blue, nodata, stretch, 1.0 - stretch);
+    let red_norm = normalize_with_range(&red, nodata, global_min, global_max);
+    let green_norm = normalize_with_range(&green, nodata, global_min, global_max);
+    let blue_norm = normalize_with_range(&blue, nodata, global_min, global_max);
 
     // Create RGB image
     let mut img = RgbImage::new(out_width as u32, out_height as u32);
@@ -533,38 +538,52 @@ fn read_band_resampled(
     Ok(data)
 }
 
-fn normalize_percentile(
-    values: &[f64],
+/// Compute global min/max percentiles across all three bands.
+/// Using the same range for all bands preserves color relationships.
+fn compute_global_percentiles(
+    r: &[f64],
+    g: &[f64],
+    b: &[f64],
     nodata: Option<f64>,
     low_pct: f64,
     high_pct: f64,
-) -> Vec<u8> {
-    // Filter out nodata values for statistics
-    let mut valid: Vec<f64> = values
+) -> (f64, f64) {
+    let is_valid = |v: &f64| -> bool {
+        if let Some(nd) = nodata {
+            (v - nd).abs() > f64::EPSILON && v.is_finite()
+        } else {
+            v.is_finite()
+        }
+    };
+
+    let mut all_valid: Vec<f64> = r
         .iter()
-        .filter(|&&v| {
-            if let Some(nd) = nodata {
-                (v - nd).abs() > f64::EPSILON && v.is_finite()
-            } else {
-                v.is_finite()
-            }
-        })
+        .chain(g.iter())
+        .chain(b.iter())
+        .filter(|v| is_valid(v))
         .copied()
         .collect();
 
-    if valid.is_empty() {
-        return vec![0u8; values.len()];
+    if all_valid.is_empty() {
+        return (0.0, 1.0);
     }
 
-    valid.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    all_valid.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    let low_idx = ((valid.len() as f64 * low_pct) as usize).min(valid.len() - 1);
-    let high_idx = ((valid.len() as f64 * high_pct) as usize).min(valid.len() - 1);
+    let low_idx = ((all_valid.len() as f64 * low_pct) as usize).min(all_valid.len() - 1);
+    let high_idx = ((all_valid.len() as f64 * high_pct) as usize).min(all_valid.len() - 1);
 
-    let min_val = valid[low_idx];
-    let max_val = valid[high_idx];
+    (all_valid[low_idx], all_valid[high_idx])
+}
+
+/// Normalize values to 0-255 using a pre-computed min/max range.
+fn normalize_with_range(
+    values: &[f64],
+    nodata: Option<f64>,
+    min_val: f64,
+    max_val: f64,
+) -> Vec<u8> {
     let range = max_val - min_val;
-
     values
         .iter()
         .map(|&v| {
