@@ -4,6 +4,11 @@ version = "0.2.2"
 edition = "2021"
 description = "View GIS raster and vector files in the terminal"
 license = "MIT"
+repository = "https://github.com/ominiverdi/gis-viewer-cli"
+homepage = "https://github.com/ominiverdi/gis-viewer-cli"
+keywords = ["gis", "geotiff", "sentinel", "raster", "terminal"]
+categories = ["command-line-utilities", "science::geo"]
+readme = "README.md"
 
 [[bin]]
 name = "gis-view"
