@@ -20,4 +20,5 @@ gdal = { version = "0.19", features = ["bindgen"] }
 image = "0.25"
 viuer = "0.11"
 anyhow = "1.0"
+base64 = "0.22"
 dialoguer = "0.11"

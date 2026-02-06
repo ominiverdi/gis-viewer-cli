@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use dialoguer::{theme::ColorfulTheme, Select};
 use gdal::vector::LayerAccess;
 use gdal::{Dataset, Metadata};
 use image::{DynamicImage, Rgb, RgbImage};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use viuer::Config;
@@ -584,21 +586,87 @@ fn normalize_percentile(
 }
 
 fn display_image(img: &DynamicImage, args: &Args) -> Result<()> {
-    let (use_kitty, use_iterm) = match args.protocol.as_deref() {
-        Some("kitty") => (true, false),
-        Some("iterm") => (false, true),
-        Some("blocks") => (false, false),
+    match args.protocol.as_deref() {
+        Some("kitty") => display_kitty_direct(img),
+        Some("iterm") => {
+            let config = Config {
+                absolute_offset: false,
+                use_kitty: false,
+                use_iterm: true,
+                ..Default::default()
+            };
+            viuer::print(img, &config).context("Failed to display image")?;
+            Ok(())
+        }
+        Some("blocks") => {
+            let config = Config {
+                absolute_offset: false,
+                use_kitty: false,
+                use_iterm: false,
+                ..Default::default()
+            };
+            viuer::print(img, &config).context("Failed to display image")?;
+            Ok(())
+        }
         Some(other) => anyhow::bail!("Unknown protocol '{}'. Use: kitty, iterm, or blocks", other),
-        None => (true, true), // auto-detect
-    };
+        None => {
+            // Auto-detect
+            let config = Config {
+                absolute_offset: false,
+                use_kitty: true,
+                use_iterm: true,
+                ..Default::default()
+            };
+            viuer::print(img, &config).context("Failed to display image")?;
+            Ok(())
+        }
+    }
+}
 
-    let config = Config {
-        absolute_offset: false,
-        use_kitty,
-        use_iterm,
-        ..Default::default()
-    };
-    viuer::print(img, &config).context("Failed to display image")?;
+/// Send image directly using Kitty graphics protocol escape sequences.
+/// Bypasses viuer's terminal detection which fails over SSH.
+fn display_kitty_direct(img: &DynamicImage) -> Result<()> {
+    let rgba = img.to_rgba8();
+    let width = rgba.width();
+    let height = rgba.height();
+    let raw = rgba.as_raw();
+
+    let encoded = general_purpose::STANDARD.encode(raw);
+    let mut stdout = std::io::stdout().lock();
+
+    // Send in chunks (Kitty protocol limit is 4096 bytes per chunk)
+    let chunk_size = 4096;
+    let chunks: Vec<&str> = encoded
+        .as_bytes()
+        .chunks(chunk_size)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect();
+
+    for (i, chunk) in chunks.iter().enumerate() {
+        let is_last = i == chunks.len() - 1;
+        if i == 0 {
+            // First chunk: include image metadata
+            write!(
+                stdout,
+                "\x1b_Ga=T,f=32,s={},v={},m={};{}\x1b\\",
+                width,
+                height,
+                if is_last { 0 } else { 1 },
+                chunk
+            )?;
+        } else {
+            // Continuation chunks
+            write!(
+                stdout,
+                "\x1b_Gm={};{}\x1b\\",
+                if is_last { 0 } else { 1 },
+                chunk
+            )?;
+        }
+    }
+
+    writeln!(stdout)?;
+    stdout.flush()?;
 
     Ok(())
 }
