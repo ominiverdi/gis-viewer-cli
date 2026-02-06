@@ -2,43 +2,34 @@
 
 ## Quick Start
 
-### Option 1: Download Pre-built Binary (Linux)
+### Option 1: Install from crates.io (Recommended)
 
-Pre-built binaries are available for specific Ubuntu/GDAL version combinations.
-**You must download the binary matching your system's GDAL version.**
-
-1. Check your GDAL version:
-   ```bash
-   gdal-config --version
-   ```
-
-2. Download the matching binary from [Releases](https://github.com/ominiverdi/gis-viewer-cli/releases):
-
-   | Your System | GDAL Version | Binary to Download |
-   |-------------|--------------|-------------------|
-   | Ubuntu 22.04 LTS | 3.4.x | `gis-view-x86_64-unknown-linux-gnu-ubuntu22.04-gdal3.4.tar.gz` |
-   | Ubuntu 24.04 LTS | 3.8.x | `gis-view-x86_64-unknown-linux-gnu-ubuntu24.04-gdal3.8.tar.gz` |
-   | Debian 12 (Bookworm) | 3.6.x | Try ubuntu22.04 build or build from source |
-   | Other/Custom GDAL | varies | Build from source (recommended) |
-
-3. Extract and install:
-   ```bash
-   tar -xzf gis-view-*.tar.gz
-   sudo mv gis-view /usr/local/bin/
-   ```
-
-### Option 2: Build from Source (Recommended for Non-standard GDAL)
-
-Building from source ensures the binary matches your exact GDAL version.
+Builds from source on your machine, automatically linking to your installed GDAL version. No version mismatch issues.
 
 ```bash
 # Install GDAL first (see Prerequisites below)
-cargo install --git https://github.com/ominiverdi/gis-viewer-cli
+cargo install gis-viewer-cli
 ```
 
-### Option 3: macOS / Windows
+### Option 2: Download Pre-built Binary
 
-Download the appropriate binary from [Releases](https://github.com/ominiverdi/gis-viewer-cli/releases):
+Pre-built binaries are available from [Releases](https://github.com/ominiverdi/gis-viewer-cli/releases).
+
+**Linux:** binaries are dynamically linked to GDAL. Download the one matching your system:
+
+| Your System | GDAL Version | Binary to Download |
+|-------------|--------------|-------------------|
+| Ubuntu 22.04 LTS | 3.4.x | `gis-view-...-ubuntu22.04-gdal3.4.tar.gz` |
+| Ubuntu 24.04 LTS | 3.8.x | `gis-view-...-ubuntu24.04-gdal3.8.tar.gz` |
+| Debian 12 (Bookworm) | 3.6.x | Try ubuntu22.04 build or use `cargo install` |
+| Other/Custom GDAL | varies | Use `cargo install` (recommended) |
+
+```bash
+tar -xzf gis-view-*.tar.gz
+sudo mv gis-view /usr/local/bin/
+```
+
+**macOS / Windows:**
 - macOS Intel: `gis-view-x86_64-apple-darwin.tar.gz`
 - macOS Apple Silicon: `gis-view-aarch64-apple-darwin.tar.gz`
 - Windows: `gis-view-x86_64-pc-windows-msvc.zip`
@@ -133,11 +124,8 @@ sudo apt install -y libgdal-dev build-essential curl
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source ~/.cargo/env
 
-# Build
-git clone https://github.com/ominiverdi/gis-viewer-cli.git
-cd gis-viewer-cli
-cargo build --release
-sudo cp target/release/gis-view /usr/local/bin/
+# Install gis-view
+cargo install gis-viewer-cli
 ```
 
 ### Amazon Linux 2023
@@ -146,6 +134,24 @@ sudo cp target/release/gis-view /usr/local/bin/
 sudo dnf install -y gdal-devel gcc
 # Then follow Rust installation above
 ```
+
+### SSH Usage
+
+When viewing images on a remote server via SSH, terminal auto-detection may fail.
+Use the `--protocol` flag to force the display protocol:
+
+```bash
+# From your Kitty terminal, SSH into the remote server:
+ssh myserver "gis-view -p kitty /path/to/image.tif"
+
+# Or in an interactive SSH session:
+gis-view -p kitty image.tif --max-res 500
+```
+
+Available protocols:
+- `kitty` - full pixel rendering (use when SSHed from Kitty terminal)
+- `iterm` - full pixel rendering (use when SSHed from iTerm2)
+- `blocks` - Unicode half-blocks (works everywhere)
 
 ### Docker
 
@@ -179,8 +185,8 @@ This means the binary was compiled against a different GDAL version than what's
 installed on your system.
 
 **Solution**: Either:
-1. Download the binary matching your GDAL version (check with `gdal-config --version`)
-2. Build from source: `cargo install --git https://github.com/ominiverdi/gis-viewer-cli`
+1. Install from source (recommended): `cargo install gis-viewer-cli`
+2. Download the binary matching your GDAL version (check with `gdal-config --version`)
 
 ### Check GDAL Library Version
 
