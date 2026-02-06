@@ -50,6 +50,10 @@ struct Args {
     /// Layer index for vector files (0-based, default: 0)
     #[arg(short = 'l', long)]
     layer: Option<usize>,
+
+    /// Force display protocol: kitty, iterm, or blocks (auto-detected by default)
+    #[arg(short = 'p', long)]
+    protocol: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -71,8 +75,21 @@ fn main() -> Result<()> {
         path_str.to_string()
     };
 
-    let dataset = Dataset::open(&gdal_path)
-        .with_context(|| format!("Failed to open: {}", args.file.display()))?;
+    let dataset = Dataset::open(&gdal_path).with_context(|| {
+        let is_zip = path_str.ends_with(".zip") || path_str.ends_with(".ZIP");
+        if is_zip {
+            format!(
+                "Failed to open: {}\nThe file exists but GDAL cannot read it. The ZIP may be corrupted or incomplete.\nTry: python3 -c \"import zipfile; zipfile.ZipFile('{}')\"",
+                args.file.display(),
+                args.file.display()
+            )
+        } else {
+            format!(
+                "Failed to open: {}\nGDAL cannot read this file. It may be corrupted or in an unsupported format.",
+                args.file.display()
+            )
+        }
+    })?;
 
     // Check if this is a container file with subdatasets but no direct bands
     let band_count = dataset.raster_count();
@@ -280,6 +297,7 @@ fn run_interactive(args: &Args) -> Result<()> {
         max_res: args.max_res,
         interactive: false,
         layer: None,
+        protocol: args.protocol.clone(),
     };
 
     let img = render_raster(&dataset, &modified_args)?;
@@ -565,12 +583,19 @@ fn normalize_percentile(
         .collect()
 }
 
-fn display_image(img: &DynamicImage, _args: &Args) -> Result<()> {
-    // Use viuer for all terminals - it handles Kitty, iTerm2, and falls back to blocks
+fn display_image(img: &DynamicImage, args: &Args) -> Result<()> {
+    let (use_kitty, use_iterm) = match args.protocol.as_deref() {
+        Some("kitty") => (true, false),
+        Some("iterm") => (false, true),
+        Some("blocks") => (false, false),
+        Some(other) => anyhow::bail!("Unknown protocol '{}'. Use: kitty, iterm, or blocks", other),
+        None => (true, true), // auto-detect
+    };
+
     let config = Config {
         absolute_offset: false,
-        use_kitty: true,
-        use_iterm: true,
+        use_kitty,
+        use_iterm,
         ..Default::default()
     };
     viuer::print(img, &config).context("Failed to display image")?;
