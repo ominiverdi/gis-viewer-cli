@@ -72,29 +72,30 @@ fn main() -> Result<()> {
     // NOTE: Don't handle interactive mode here - check file type first
     // Interactive mode is handled below based on whether it's raster or vector
 
-    // Build the path - handle ZIP files with /vsizip/ prefix
+    // Open the file with GDAL
+    // For ZIP files, try direct open first (newer GDAL supports it),
+    // then fall back to /vsizip/ prefix
     let path_str = args.file.to_string_lossy();
-    let gdal_path = if path_str.ends_with(".zip") || path_str.ends_with(".ZIP") {
-        format!("/vsizip/{}", path_str)
-    } else {
-        path_str.to_string()
-    };
+    let is_zip = path_str.ends_with(".zip") || path_str.ends_with(".ZIP");
 
-    let dataset = Dataset::open(&gdal_path).with_context(|| {
-        let is_zip = path_str.ends_with(".zip") || path_str.ends_with(".ZIP");
-        if is_zip {
-            format!(
-                "Failed to open: {}\nThe file exists but GDAL cannot read it. The ZIP may be corrupted or incomplete.\nTry: python3 -c \"import zipfile; zipfile.ZipFile('{}')\"",
-                args.file.display(),
-                args.file.display()
-            )
-        } else {
+    let dataset = if is_zip {
+        Dataset::open(path_str.as_ref())
+            .or_else(|_| Dataset::open(&format!("/vsizip/{}", path_str)))
+            .with_context(|| {
+                format!(
+                    "Failed to open: {}\nThe file exists but GDAL cannot read it. The ZIP may be corrupted or incomplete.\nTry: python3 -c \"import zipfile; zipfile.ZipFile('{}')\"",
+                    args.file.display(),
+                    args.file.display()
+                )
+            })?
+    } else {
+        Dataset::open(path_str.as_ref()).with_context(|| {
             format!(
                 "Failed to open: {}\nGDAL cannot read this file. It may be corrupted or in an unsupported format.",
                 args.file.display()
             )
-        }
-    })?;
+        })?
+    };
 
     // Check if this is a container file with subdatasets but no direct bands
     let band_count = dataset.raster_count();
