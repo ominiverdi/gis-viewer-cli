@@ -19,45 +19,33 @@ View GIS raster and vector files directly in the terminal. Supports Sentinel-2, 
 
 ## Installation
 
-### macOS / Windows
+### From crates.io (Recommended)
 
-Download the latest binary for your platform from [Releases](https://github.com/ominiverdi/gis-viewer-cli/releases).
-
-GDAL must be installed:
-```bash
-# macOS
-brew install gdal
-
-# Windows: GDAL is bundled or use OSGeo4W
-```
-
-### Linux
-
-**Important:** Linux binaries are dynamically linked to GDAL. You must download 
-the binary matching your system's GDAL version, or build from source.
-
-1. Check your GDAL version:
-   ```bash
-   gdal-config --version
-   ```
-
-2. Download the matching binary from [Releases](https://github.com/ominiverdi/gis-viewer-cli/releases):
-   - Ubuntu 22.04 (GDAL 3.4): `gis-view-...-ubuntu22.04-gdal3.4.tar.gz`
-   - Ubuntu 24.04 (GDAL 3.8): `gis-view-...-ubuntu24.04-gdal3.8.tar.gz`
-
-3. Or **build from source** (recommended for non-standard GDAL versions):
-   ```bash
-   sudo apt install libgdal-dev
-   cargo install --git https://github.com/ominiverdi/gis-viewer-cli
-   ```
-
-### Build from Source
+Builds from source on your machine, automatically linking to your installed GDAL version.
 
 ```bash
 # Install GDAL first
 # macOS: brew install gdal
-# Ubuntu: sudo apt install libgdal-dev
+# Ubuntu/Debian: sudo apt install libgdal-dev
+# Fedora: sudo dnf install gdal-devel
 
+cargo install gis-viewer-cli
+```
+
+### Pre-built Binaries
+
+Download from [Releases](https://github.com/ominiverdi/gis-viewer-cli/releases).
+
+**Linux:** binaries are dynamically linked to GDAL. Download the one matching your system:
+- Ubuntu 22.04 (GDAL 3.4): `gis-view-...-ubuntu22.04-gdal3.4.tar.gz`
+- Ubuntu 24.04 (GDAL 3.8): `gis-view-...-ubuntu24.04-gdal3.8.tar.gz`
+- Other versions: use `cargo install` above
+
+**macOS / Windows:** download the binary for your architecture. GDAL must be installed (`brew install gdal` on macOS).
+
+### Build from Source
+
+```bash
 git clone https://github.com/ominiverdi/gis-viewer-cli.git
 cd gis-viewer-cli
 cargo build --release
